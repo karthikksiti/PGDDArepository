@@ -1,0 +1,216 @@
+#Set Working directory based on where the datasets are saved
+library(stringr)
+library(tidyr)
+library(dplyr)
+library(gdata)
+
+#Checkpoints - Part 1
+#Checkpoint 1: Data Cleaning 1
+#Load the companies and rounds data (provided on the previous page) into two data frames and name them companies and rounds2 respectively.
+
+#As the values in the companies.txt are tab-delimited, we shall use the read.delim() function
+
+companies<- read.delim("companies.txt",header = TRUE, sep='\t', stringsAsFactors = FALSE)
+
+#To load the rounds.csv file, we shall use the read.csv() function
+
+rounds2 <- read.csv("rounds2.csv", header = TRUE, stringsAsFactors = FALSE)
+
+#Table 1.1: The table below is just for reference - you need to fill out the spreadsheet which is attached in the download section. This holds true for all the tables.
+
+#Results Expected: Table 1.1
+# Table 1.1: Understand the Data Set 
+#
+#How many unique companies are present in rounds2?
+#The distinct() function with the tolower() function are used with nrow() to return the number of distinct companies in rounds2
+nrow(distinct(rounds2,tolower(company_permalink)))
+
+#How many unique companies are present in companies?
+nrow(distinct(companies,tolower(permalink)))
+
+#In the companies data frame, which column can be used as the unique key for each company? Write the name of the column.
+#permalink, because the name column does not have unique values
+#Are there any companies in the rounds2 file which are not present in companies? Answer yes or no: Y/N
+#N - A vlookup in Excel provides this result
+#Merge the two data frames so that all variables (columns) in the companies frame are added to the rounds2 data frame. Name the merged frame master_frame. How many observations are present in master_frame?
+# we shall create a common column name in rounds2 and companies
+rounds2 <- mutate(rounds2, permalink = str_to_lower(rounds2$company_permalink))
+rounds2 <- rounds2[,-1]
+
+companies <- mutate(companies, permalink = str_to_lower(companies$permalink))
+
+#We shall use the merge() function. We pass rounds2 as the first data-frame, and companies as the second dataframe. The columns to be used for merging are denoted by by.x and by.y. We do not pass parameters for other arguments as they are mot required
+master_frame <- merge(rounds2,companies, by = "permalink")
+
+#Checkpoint 2: Funding Type Analysis
+#Table-2.1
+# Average Values of Investments for Each of these Funding Types
+#Average funding amount of venture type
+#We shall group_by 'funding_round_type' and extract the mean, and set the na.rm = True to ignore NA values
+funding_round_group_by <- group_by(master_frame,funding_round_type)
+average_funding_by_funding_round <- summarise(funding_round_group_by,average_funding =mean(raised_amount_usd, na.rm = TRUE))
+#Considering that Spark Funds wants to invest between 5 to 15 million USD per  investment round, which investment type is the most suitable for them?
+
+#we shall use the filter() function to identify the suitable funding round
+suitable_funding_round <- filter(average_funding_by_funding_round,average_funding > 5000000 & average_funding < 15000000)
+
+#Checkpoint 3: Country Analysis        
+#Spark Funds wants to see the top nine countries which have received the highest total funding (across ALL sectors for the chosen investment type)
+#We need to use the group_by() for the funding_round_type field and the country_code field
+funding_round_type_country_group <- group_by(master_frame,funding_round_type,country_code)
+#Observations
+#There are 8,678 rows where the country_code is not populated.
+nrow(filter(master_frame,country_code == ""))
+# we shall calculate the sum of the raised_amount_usd for the above group_by(), ignoring the rows where the country_code is blank
+summary_funding_type_country <- summarise(funding_round_type_country_group, total_sum_raised = sum(raised_amount_usd, na.rm = TRUE))
+# We shall filter by funding_round_type = venture and where the country_code is not blank
+summary_venture_country <- filter(summary_funding_type_country, funding_round_type == "venture", country_code !="")
+# The filtered data needs to be sorted in descending order by total_sum_raised
+sorted_sum_venture_country <- arrange(summary_venture_country, desc(total_sum_raised))
+
+#For the chosen investment type, make a data frame named top9 with the top nine countries (based on the total investment amount each country has received)
+# The top 9 rows need to be extracted from sorted_sum_venture_country into the top9 data frame
+top9 <- head(sorted_sum_venture_country,9)
+
+#Identify the top three English-speaking countries in the data frame top9
+# For the list of English-speaking countries, we need to refer http://www.emmir.org/fileadmin/user_upload/admission/Countries_where_English_is_an_official_language.pdf
+#The top 3 countries are: USA, Great Britain (GBR) and India (IND)
+
+#Checkpoint 4: Sector Analysis 1
+#The mapping sheet needs to be loaded
+mapping <- read.csv("mapping.csv",header = TRUE, stringsAsFactors = FALSE)
+
+#Extract the primary sector of each category list from the category_list column using the str_extract() function
+master_frame = mutate(master_frame, primary_category = str_extract(master_frame$category_list,"[^|]+"))
+
+#Use the mapping file 'mapping.csv' to map each primary sector to one of the eight main sectors (Note that 'Others' is also considered one of the main sectors)
+#since the sector columns are not variables, we shall convert them into key-value pairs using the gather() function
+mapping <- gather(mapping,main_sector,primary_category, Automotive...Sports:Social..Finance..Analytics..Advertising)
+#Since we need only rows where the primary_category = 1, we shall filter the data
+mapping <- filter(mapping,primary_category == 1)
+#The primary_category column needs to be deleted
+mapping <- mapping[,-3]
+#the category_list column in mapping shall be renamed to primary_category to facilitate merge in next step
+colnames(mapping)[1]<- "primary_category"
+#Merge the master_frame with the mapping sheet to determine the primary_category and main_sector mapping in master_frame
+# the all.x = TRUE argument is passed so that rows with no primary sector are filled with NA
+
+master_frame <- merge(master_frame,mapping,by = "primary_category", all.x = TRUE)
+
+#Checkpoint 5: Sector Analysis 2
+
+#the main_sector column is of character type. So, it shall be converted to factor
+
+master_frame$main_sector <- factor(master_frame$main_sector)
+
+#Create three separate data frames D1, D2 and D3 for each of the three countries containing the observations of funding type FT falling within the 5-15 million USD range. The three data frames should contain:
+#All the columns of the master_frame along with the primary sector(primary_category) and the main sector
+#First, filter the master_frame for funding_round_type = venture and raised_amount_usd between 5 million and 15 million
+master_frame_venture <- filter(master_frame,funding_round_type == "venture" & raised_amount_usd >= 5000000 & raised_amount_usd <= 15000000)
+
+D1 <- filter(master_frame_venture, country_code == "USA")
+D2 <- filter(master_frame_venture, country_code == "GBR")
+D3 <- filter(master_frame_venture, country_code == "IND")
+
+#The total number (or count) of investments for each main sector in a separate column
+#The total amount invested in each main sector in a separate column
+D1_group <- group_by(D1,main_sector)
+
+# The n() is used to count the number of observations
+D1_summary <- summarise(D1_group, total_amount = sum(raised_amount_usd, na.rm = TRUE),count = n() )
+
+# The summary is arranged with the count of investments in descending order
+D1_summary <- arrange(D1_summary, desc(count))
+
+D2_group <-group_by(D2,main_sector) 
+D2_summary <- summarise(D2_group, total_amount = sum(raised_amount_usd, na.rm = TRUE),count = n() )
+D2_summary <- arrange(D2_summary, desc(count))
+
+D3_group <-group_by(D3,main_sector) 
+D3_summary <- summarise(D3_group, total_amount = sum(raised_amount_usd, na.rm = TRUE),count = n() )
+D3_summary <- arrange(D3_summary, desc(count))
+
+USA <- D1_summary
+GBR <- D2_summary
+IND <- D3_summary
+
+#Total number of Investments (count) for C1 - USA
+#Total amount of investment (USD) for C1 - USA
+D1_total <- summarise(D1,total_amount_usa = sum(raised_amount_usd, na.rm = TRUE), total_number_usa = n())
+
+#Total number of Investments (count) for C2 - GBR
+#Total amount of investment (USD) for C2 - GBR
+D2_total <- summarise(D2,total_amount_gbr = sum(raised_amount_usd, na.rm = TRUE), total_number_gbr = n())
+
+#Total number of Investments (count) for C3 - IND
+#Total amount of investment (USD) for C3 - IND
+D3_total <- summarise(D3,total_amount_ind = sum(raised_amount_usd, na.rm = TRUE), total_number_ind = n())
+
+#Top Sector name (no. of investment-wise) for C1 - USA
+#Number of investments in top sector (3) for C1 - USA
+USA_top_sector <- head(USA,n=1)
+
+#Second Sector name (no. of investment-wise) for C1 - USA
+#Number of investments in second sector (4) for C1 - USA
+USA_second_sector <- USA[2,]
+
+#Third Sector name (no. of investment-wise) for C1 - USA
+#Number of investments in third sector (5)for C1 - USA
+USA_third_sector <- USA[3,]
+
+#Top Sector name (no. of investment-wise) for C2 - GBR
+#Number of investments in top sector (3) for C2 - GBR
+GBR_top_sector <- head(GBR,n=1)
+
+#Second Sector name (no. of investment-wise) for C2 - GBR
+#Number of investments in second sector (4) for C2 - GBR
+GBR_second_sector <- GBR[2,]
+
+#Third Sector name (no. of investment-wise) for C2 - GBR
+#Number of investments in third sector (5)for C2 - GBR
+GBR_third_sector <- GBR[3,]
+
+#Top Sector name (no. of investment-wise) for C3 - IND
+#Number of investments in top sector (3) for C3 - IND
+IND_top_sector <- head(IND,n=1)
+
+#Second Sector name (no. of investment-wise) for C3 - IND
+#Number of investments in second sector (4) for C3 - IND
+IND_second_sector <- IND[2,]
+
+#Third Sector name (no. of investment-wise) for C3 - IND
+#Number of investments in third sector (5)for C3 - IND
+IND_third_sector <- IND[3,]
+
+
+#For point 3 (top sector count-wise), which company received the highest investment? C1 - USA
+D1_company_top_invest <- filter(D1, main_sector == "Others")
+D1_company_top_invest <- arrange(D1_company_top_invest, desc(raised_amount_usd)) 
+D1_top_company_det <- head(D1_company_top_invest$name, n=1)
+
+#For point 4 (second best sector count-wise), which company received the highest investment? C1 - USA
+D1_company_second_top_invest <- filter(D1, main_sector == "Cleantech...Semiconductors")
+D1_company_second_top_invest <- arrange(D1_company_second_top_invest, desc(raised_amount_usd))
+D1_second_top_company_det <- head(D1_company_second_top_invest$name, n=1)
+
+#For point 3 (top sector count-wise), which company received the highest investment? C2 - GBR
+D2_company_top_invest <- filter(D2, main_sector == "Others")
+D2_company_top_invest <- arrange(D2_company_top_invest, desc(raised_amount_usd)) 
+D2_top_company_det <- head(D2_company_top_invest$name, n=1)
+
+#For point 4 (second best sector count-wise), which company received the highest investment? C2 - GBR
+D2_company_second_top_invest <- filter(D2, main_sector == "Cleantech...Semiconductors")
+D2_company_second_top_invest <- arrange(D2_company_second_top_invest, desc(raised_amount_usd))
+D2_second_top_company_det <- head(D2_company_second_top_invest$name, n=1)
+
+#For point 3 (top sector count-wise), which company received the highest investment? C3 - IND
+D3_company_top_invest <- filter(D3, main_sector == "Others")
+D3_company_top_invest <- arrange(D3_company_top_invest, desc(raised_amount_usd)) 
+D3_top_company_det <- head(D3_company_top_invest$name, n=1)
+
+#For point 4 (second best sector count-wise), which company received the highest investment? C3 - IND
+D3_company_second_top_invest <- filter(D3, main_sector == "News..Search.and.Messaging")
+D3_company_second_top_invest <- arrange(D3_company_second_top_invest, desc(raised_amount_usd))
+D3_second_top_company_det <- head(D3_company_second_top_invest$name, n=1)
+
+  
