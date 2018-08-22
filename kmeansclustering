@@ -1,0 +1,87 @@
+#Set working directory
+Online.Retail <- read.csv("Online-Retail.csv", stringsAsFactors=FALSE)
+#remove missing values
+order_wise <- na.omit(Online.Retail)
+#transform the order-data into customer data by find key attributes using RFM analysis
+#Start with the computation of monetary data at a customer-level. Create a vector named Amount, which creates the total monetary value of each order, and append the column to your data set.
+Amount <- order_wise$Quantity*order_wise$UnitPrice
+order_wise<- cbind(order_wise,Amount)
+# sort the data set in order of CustomerID
+order_wise <- order_wise[order(order_wise$CustomerID),]
+#create a new vector — monetary — which gives the aggregated purchase amount for each customer
+monetary <- aggregate(Amount~CustomerID, order_wise,sum)
+#let’s compute the frequency of purchase for each customer, i.e. the F of the RFM framework.
+#We will count the number of unique Invoice Numbers for each Customer ID
+frequency <- order_wise[,c(7,1)]
+temp<- table(as.factor(frequency$CustomerID))
+temp<-data.frame(temp)
+colnames(temp)[1]<- c("CustomerID")
+#merge this data frame with the “Frequency” of each customer into the earlier data set containing the “Monetary” value.  
+RFM <- merge(monetary,temp,by="CustomerID")
+#Computation of the recency, i.e. for how long a customer has not visited the online store
+recency<- order_wise[,c(7,5)]
+recency$InvoiceDate<- as.Date(recency$InvoiceDate,"%m/%d/%Y %H:%M")
+#find the latest “Invoice Date” which forms the reference point for the calculation of the “Recency” of each customer. For each order corresponding to each customer, you find the difference from the latest “Invoice Date” and then find the minimum “Recency” value for each customer.
+maximum <- max(recency$InvoiceDate)
+maximum <- maximum+1
+maximum$diff <- maximum - recency$InvoiceDate
+recency$diff<-maximum$diff
+recency<- aggregate(recency$diff,by=list(recency$CustomerID),FUN = "min")
+colnames(recency)[1]<- "CustomerID"
+colnames(recency)[2]<-"Recency"
+# merge it to the RFM data set and change the format to the required form.
+RFM <- merge(RFM,recency,by=("CustomerID"))
+RFM$Recency <- as.numeric(RFM$Recency)
+#Outlier treatment
+#eliminating all the data points which fall outside the whiskers of the box plot plotted
+box <- boxplot.stats(RFM$Amount)
+out <- box$out
+RFM1 <- RFM[ !RFM$Amount %in% out, ]
+RFM <- RFM1
+box<- boxplot.stats(RFM$Freq)
+out <- box$out
+RFM1 <- RFM[ !RFM$Freq %in% out, ]
+RFM <- RFM1
+box <- boxplot.stats(RFM$Recency)
+out <- box$out
+RFM1 <- RFM[ !RFM$Recency %in% out, ]
+RFM <- RFM1
+#scaling the data for standardization such that mean= 0 and standard deviation= 1
+RFM_norm <- RFM[,-1]
+RFM_norm$Amount <-scale(RFM_norm$Amount)
+RFM_norm$Freq <- scale(RFM_norm$Freq)
+RFM_norm$Recency<- scale(RFM_norm$Recency)
+## Implementing K-Means algorithm
+
+clus3 <- kmeans(RFM_norm, centers = 3, iter.max = 50, nstart = 50)
+## Finding the optimal value of K
+
+r_sq<- rnorm(20)
+
+for (number in 1:20){clus <- kmeans(RFM_norm, centers = number, nstart = 50)
+r_sq[number]<- clus$betweenss/clus$totss
+}
+plot(r_sq)
+## Running the K-Means algorithm for K =4,5,6
+
+clus4 <- kmeans(RFM_norm, centers = 4, iter.max = 50, nstart = 50)
+
+clus5 <- kmeans(RFM_norm, centers = 5, iter.max = 50, nstart = 50)
+
+clus6 <- kmeans(RFM_norm, centers = 6, iter.max = 50, nstart = 50)
+## Appending the ClusterIDs to RFM data
+
+RFM_km <-cbind(RFM,clus5$cluster)
+
+colnames(RFM_km)[5]<- "ClusterID"
+## Cluster Analysis
+
+library(dplyr)
+km_clusters<- group_by(RFM_km, ClusterID)
+
+tab1<- summarise(km_clusters, Mean_amount=mean(Amount), Mean_freq=mean(Freq), Mean_recency=mean(Recency))
+
+ggplot(tab1, aes(x= factor(ClusterID), y=Mean_amount)) + geom_bar(stat = "identity")
+ggplot(tab1, aes(x= factor(ClusterID), y=Mean_freq)) + geom_bar(stat = "identity")
+ggplot(tab1, aes(x= factor(ClusterID), y=Mean_recency)) + geom_bar(stat = "identity")
+
